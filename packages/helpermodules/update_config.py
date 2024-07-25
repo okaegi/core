@@ -42,7 +42,7 @@ NO_MODULE = {"type": None, "configuration": {}}
 
 
 class UpdateConfig:
-    DATASTORE_VERSION = 50
+    DATASTORE_VERSION = 54
     valid_topic = [
         "^openWB/bat/config/configured$",
         "^openWB/bat/set/charging_power_left$",
@@ -76,6 +76,7 @@ class UpdateConfig:
         "^openWB/chargepoint/[0-9]+/control_parameter/chargemode$",
         "^openWB/chargepoint/[0-9]+/control_parameter/current_plan$",
         "^openWB/chargepoint/[0-9]+/control_parameter/imported_at_plan_start$",
+        "^openWB/chargepoint/[0-9]+/control_parameter/imported_instant_charging$",
         "^openWB/chargepoint/[0-9]+/control_parameter/limit$",
         "^openWB/chargepoint/[0-9]+/control_parameter/prio$",
         "^openWB/chargepoint/[0-9]+/control_parameter/required_current$",
@@ -87,6 +88,7 @@ class UpdateConfig:
         "^openWB/chargepoint/[0-9]+/control_parameter/state$",
         "^openWB/chargepoint/[0-9]+/get/charge_state$",
         "^openWB/chargepoint/[0-9]+/get/currents$",
+        "^openWB/chargepoint/[0-9]+/get/evse_current$",
         "^openWB/chargepoint/[0-9]+/get/fault_state$",
         "^openWB/chargepoint/[0-9]+/get/fault_str$",
         "^openWB/chargepoint/[0-9]+/get/frequency$",
@@ -99,7 +101,11 @@ class UpdateConfig:
         "^openWB/chargepoint/[0-9]+/get/power$",
         "^openWB/chargepoint/[0-9]+/get/powers$",
         "^openWB/chargepoint/[0-9]+/get/power_factors$",
+        "^openWB/chargepoint/[0-9]+/get/vehicle_id$",
         "^openWB/chargepoint/[0-9]+/get/voltages$",
+        "^openWB/chargepoint/[0-9]+/get/serial_number$",
+        "^openWB/chargepoint/[0-9]+/get/soc$",
+        "^openWB/chargepoint/[0-9]+/get/soc_timestamp$",
         "^openWB/chargepoint/[0-9]+/get/state_str$",
         "^openWB/chargepoint/[0-9]+/get/connected_vehicle/soc$",
         "^openWB/chargepoint/[0-9]+/get/connected_vehicle/info$",
@@ -155,7 +161,6 @@ class UpdateConfig:
         "^openWB/counter/[0-9]+/set/error_counter$",
         "^openWB/counter/[0-9]+/set/released_surplus$",
         "^openWB/counter/[0-9]+/set/reserved_surplus$",
-        "^openWB/counter/[0-9]+/set/state_str$",
         "^openWB/counter/[0-9]+/config/max_currents$",
         "^openWB/counter/[0-9]+/config/max_total_power$",
 
@@ -165,6 +170,7 @@ class UpdateConfig:
         "^openWB/general/external_buttons_hw$",
         "^openWB/general/grid_protection_configured$",
         "^openWB/general/grid_protection_active$",
+        "^openWB/general/http_api$",
         "^openWB/general/modbus_control$",
         "^openWB/general/mqtt_bridge$",
         "^openWB/general/grid_protection_timestamp$",
@@ -241,6 +247,8 @@ class UpdateConfig:
 
         "^openWB/pv/config/configured$",
         "^openWB/pv/get/exported$",
+        "^openWB/pv/get/fault_state$",
+        "^openWB/pv/get/fault_str$",
         "^openWB/pv/get/power$",
         "^openWB/pv/get/daily_exported$",
         "^openWB/pv/get/monthly_exported$",
@@ -355,6 +363,8 @@ class UpdateConfig:
         "^openWB/LegacySmartHome/config/get/Devices/[0-9]+/device_updatesec$",
         "^openWB/LegacySmartHome/config/get/Devices/[0-9]+/device_username$",
         "^openWB/LegacySmartHome/config/set/Devices/[0-9]+/mode$",
+        "^openWB/LegacySmartHome/Devices/[0-9]+/device_manual_control$",
+        "^openWB/LegacySmartHome/Devices/[0-9]+/mode$",
         "^openWB/LegacySmartHome/Devices/[0-9]+/WHImported_temp$",
         "^openWB/LegacySmartHome/Devices/[0-9]+/RunningTimeToday$",
         "^openWB/LegacySmartHome/Devices/[0-9]+/oncountnor$",
@@ -450,6 +460,7 @@ class UpdateConfig:
         ("openWB/general/extern_display_mode", "primary"),
         ("openWB/general/external_buttons_hw", False),
         ("openWB/general/grid_protection_configured", True),
+        ("openWB/general/http_api", False),
         ("openWB/general/modbus_control", False),
         ("openWB/general/notifications/selected", "none"),
         ("openWB/general/notifications/plug", False),
@@ -1590,3 +1601,53 @@ class UpdateConfig:
     def upgrade_datastore_49(self) -> None:
         Pub().pub("openWB/system/installAssistantDone", True)
         Pub().pub("openWB/system/datastore_version", 50)
+
+    def upgrade_datastore_50(self) -> None:
+        # es gibt noch Topics von gelöschten Komponenten unter openWB/(counter|pv|bat)/[0-9], aber keine Konfiguration
+        # zu den Komponenten.
+        def upgrade(topic: str, payload) -> Optional[dict]:
+            if re.search("openWB/(counter|pv|bat)/[0-9]+", topic) is not None:
+                for component_topic in self.all_received_topics.keys():
+                    if re.search("openWB/system/device/[0-9]+/component/[0-9]+/config$", component_topic) is not None:
+                        if get_second_index(component_topic) == get_index(topic):
+                            return
+                else:
+                    return {topic: ""}
+        self._loop_all_received_topics(upgrade)
+        self.__update_topic("openWB/system/datastore_version", 51)
+
+    def upgrade_datastore_51(self) -> None:
+        def upgrade(topic: str, payload) -> None:
+            if re.search("openWB/system/device/[0-9]+", topic) is not None:
+                payload = decode_payload(payload)
+                # update version and firmware of GoodWe
+                if payload.get("type") == "deye" and "device_type" in payload["configuration"]:
+                    payload["configuration"].pop("device_type")
+                Pub().pub(topic, payload)
+        self._loop_all_received_topics(upgrade)
+        self.__update_topic("openWB/system/datastore_version", 52)
+
+    def upgrade_datastore_52(self) -> None:
+        # PR reverted
+        self.__update_topic("openWB/system/datastore_version", 53)
+
+    def upgrade_datastore_53(self) -> None:
+        def upgrade(topic: str, payload) -> Optional[dict]:
+            if "openWB/optional/int_display/theme" == topic:
+                configuration_payload = decode_payload(payload)
+                if configuration_payload.get("type") == "cards":
+                    if configuration_payload["configuration"].get("enable_energy_flow_view") is None:
+                        configuration_payload["configuration"].update({
+                            "enable_energy_flow_view": True,
+                        })
+                    if configuration_payload["configuration"].get("enable_dashboard_card_vehicles") is None:
+                        configuration_payload["configuration"].update({
+                            "enable_dashboard_card_vehicles": True,
+                        })
+                    if configuration_payload["configuration"].get("simple_charge_point_view") is None:
+                        configuration_payload["configuration"].update({
+                            "simple_charge_point_view": True,
+                        })
+                    return {topic: configuration_payload}
+        self._loop_all_received_topics(upgrade)
+        self.__update_topic("openWB/system/datastore_version", 54)
