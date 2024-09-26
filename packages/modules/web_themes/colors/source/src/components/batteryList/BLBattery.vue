@@ -10,18 +10,19 @@ Hagen */
 			<WbBadge :bgcolor="statusbg">{{ batteryState }}</WbBadge>
 		</template>
 		<div class="subgrid pt-1">
-			<InfoItem heading="Geliefert:" :small="true" class="grid-left grid-col-4">
-				<FormatWattH :watt-h="props.bat.dailyYieldExport"></FormatWattH>
+			<InfoItem heading="Ladestand:" :small="true" class="grid-left grid-col-4">
+				<BatterySymbol :soc="props.bat.soc"></BatterySymbol>
 			</InfoItem>
+
 			<InfoItem heading="Geladen:" :small="true" class="grid-col-4">
 				<FormatWattH :watt-h="props.bat.dailyYieldImport"></FormatWattH>
 			</InfoItem>
 			<InfoItem
-				heading="Ladestand:"
+				heading="Geliefert:"
 				:small="true"
 				class="grid-right grid-col-4"
 			>
-				<BatterySymbol :soc="props.bat.soc"></BatterySymbol>
+				<FormatWattH :watt-h="props.bat.dailyYieldExport"></FormatWattH>
 			</InfoItem>
 		</div>
 	</WbSubwidget>

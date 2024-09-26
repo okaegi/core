@@ -14,8 +14,8 @@ const props = defineProps<{
 
 const WbBadgestyle = computed(() => {
 	let result = {
-		'background-color': props.bgcolor ?? 'var(--color-menu)',
 		color: props.color ?? 'var(--color-bg)',
+		'background-color': props.bgcolor ?? 'var(--color-menu)',
 	}
 	return result
 })
@@ -25,5 +25,8 @@ const WbBadgestyle = computed(() => {
 .pillWbBadge {
 	font-size: (var--font-small);
 	font-weight: regular;
+	display: flex;
+	justify-content: center;
+	align-items: center;
 }
 </style>
