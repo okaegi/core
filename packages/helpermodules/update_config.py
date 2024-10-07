@@ -18,7 +18,11 @@ from helpermodules import timecheck
 from helpermodules import hardware_configuration
 from helpermodules.broker import InternalBrokerClient
 from helpermodules.constants import NO_ERROR
-from helpermodules.hardware_configuration import get_hardware_configuration_setting, update_hardware_configuration
+from helpermodules.hardware_configuration import (
+    get_hardware_configuration_setting,
+    update_hardware_configuration,
+    get_serial_number
+)
 from helpermodules.measurement_logging.process_log import get_default_charge_log_columns, get_totals
 from helpermodules.measurement_logging.write_log import get_names
 from helpermodules.messaging import MessageType, pub_system_message
@@ -31,11 +35,11 @@ from control import ev
 from control.general import Prices
 from modules.common.abstract_vehicle import GeneralVehicleConfig
 from modules.common.component_type import ComponentType
-from modules.devices.sungrow.version import Version
+from modules.devices.sungrow.sungrow.version import Version
 from modules.display_themes.cards.config import CardsDisplayTheme
 from modules.ripple_control_receivers.gpio.config import GpioRcr
 from modules.web_themes.standard_legacy.config import StandardLegacyWebTheme
-from modules.devices.good_we.version import GoodWeVersion
+from modules.devices.good_we.good_we.version import GoodWeVersion
 
 log = logging.getLogger(__name__)
 
@@ -43,7 +47,7 @@ NO_MODULE = {"type": None, "configuration": {}}
 
 
 class UpdateConfig:
-    DATASTORE_VERSION = 58
+    DATASTORE_VERSION = 61
     valid_topic = [
         "^openWB/bat/config/configured$",
         "^openWB/bat/set/charging_power_left$",
@@ -238,6 +242,7 @@ class UpdateConfig:
         "^openWB/optional/et/get/prices$",
         "^openWB/optional/et/provider$",
         "^openWB/optional/int_display/active$",
+        "^openWB/optional/int_display/detected$",
         "^openWB/optional/int_display/on_if_plugged_in$",
         "^openWB/optional/int_display/pin_active$",
         "^openWB/optional/int_display/pin_code$",
@@ -275,6 +280,7 @@ class UpdateConfig:
         "^openWB/vehicle/[0-9]+/charge_template$",
         "^openWB/vehicle/[0-9]+/ev_template$",
         "^openWB/vehicle/[0-9]+/name$",
+        "^openWB/vehicle/[0-9]+/info$",
         "^openWB/vehicle/[0-9]+/soc_module/calculated_soc_state$",
         "^openWB/vehicle/[0-9]+/soc_module/config$",
         "^openWB/vehicle/[0-9]+/soc_module/general_config$",
@@ -428,6 +434,7 @@ class UpdateConfig:
         ("openWB/counter/config/consider_less_charging", counter_all.Config().consider_less_charging),
         ("openWB/counter/config/home_consumption_source_id", counter_all.Config().home_consumption_source_id),
         ("openWB/vehicle/0/name", "Standard-Fahrzeug"),
+        ("openWB/vehicle/0/info", {"manufacturer": None, "model": None}),
         ("openWB/vehicle/0/charge_template", ev.Ev(0).charge_template.ct_num),
         ("openWB/vehicle/0/soc_module/config", NO_MODULE),
         ("openWB/vehicle/0/soc_module/general_config", dataclass_utils.asdict(GeneralVehicleConfig())),
@@ -482,12 +489,13 @@ class UpdateConfig:
         ("openWB/internal_chargepoint/0/data/parent_cp", None),
         ("openWB/internal_chargepoint/1/data/parent_cp", None),
         ("openWB/optional/et/provider", NO_MODULE),
-        ("openWB/optional/int_display/active", False),
+        ("openWB/optional/int_display/active", True),
+        ("openWB/optional/int_display/detected", True),
         ("openWB/optional/int_display/on_if_plugged_in", True),
         ("openWB/optional/int_display/pin_active", False),
         ("openWB/optional/int_display/pin_code", "0000"),
         ("openWB/optional/int_display/standby", 60),
-        ("openWB/optional/int_display/rotation", 180),
+        ("openWB/optional/int_display/rotation", 0),
         ("openWB/optional/int_display/theme", dataclass_utils.asdict(CardsDisplayTheme())),
         ("openWB/optional/int_display/only_local_charge_points", False),
         ("openWB/optional/led/active", False),
@@ -503,6 +511,7 @@ class UpdateConfig:
         ("openWB/system/ip_address", "unknown"),
         ("openWB/system/mqtt/valid_partner_ids", []),
         ("openWB/system/release_train", "master"),
+        ("openWB/system/serial_number", get_serial_number()),
     )
     invalid_topic = (
         # Tuple: (Regex, callable)
@@ -610,7 +619,8 @@ class UpdateConfig:
     def __solve_breaking_changes(self) -> None:
         """ solve breaking changes in the datastore
         """
-        datastore_version = decode_payload(self.all_received_topics.get("openWB/system/datastore_version")) or 0
+        datastore_version = (decode_payload(self.all_received_topics.get("openWB/system/datastore_version")) or
+                             self.DATASTORE_VERSION)
         log.debug(f"current datastore version: {datastore_version}")
         log.debug(f"target datastore version: {self.DATASTORE_VERSION}")
         for version in range(datastore_version, self.DATASTORE_VERSION):
@@ -1624,7 +1634,7 @@ class UpdateConfig:
         def upgrade(topic: str, payload) -> None:
             if re.search("openWB/system/device/[0-9]+", topic) is not None:
                 payload = decode_payload(payload)
-                # update version and firmware of GoodWe
+                # remove device type of deye
                 if payload.get("type") == "deye" and "device_type" in payload["configuration"]:
                     payload["configuration"].pop("device_type")
                 Pub().pub(topic, payload)
@@ -1713,3 +1723,72 @@ class UpdateConfig:
                 Pub().pub(topic, payload)
         self._loop_all_received_topics(upgrade)
         self.__update_topic("openWB/system/datastore_version", 58)
+
+    def upgrade_datastore_58(self) -> None:
+        def upgrade(topic: str, payload) -> Optional[dict]:
+            # add manufacturer and model to vehicles
+            if re.search("openWB/vehicle/[0-9]+/name", topic) is not None:
+                vehicle_info_topic = topic.replace("/name", "/info")
+                if vehicle_info_topic not in self.all_received_topics:
+                    return {vehicle_info_topic: {"manufacturer": None, "model": None}}
+            # add manufacturer and model to components
+            if re.search("openWB/system/device/[0-9]+/component/[0-9]+/config", topic) is not None:
+                config_payload = decode_payload(payload)
+                if "info" not in config_payload:
+                    config_payload.update({"info": {"manufacturer": None, "model": None}})
+                    return {topic: config_payload}
+        self._loop_all_received_topics(upgrade)
+        self.__update_topic("openWB/system/datastore_version", 59)
+
+    def upgrade_datastore_59(self) -> None:
+        def upgrade(topic: str, payload) -> Optional[dict]:
+            if re.search("openWB/system/device/[0-9]+/config", topic) is not None:
+                # add "vendor" to devices
+                device_config = decode_payload(payload)
+                # defaults to vendor = type
+                device_vendor = device_config.get("type")
+                # 1. generic devices
+                if device_config.get("type") in ["http", "json", "mqtt", "virtual"]:
+                    device_vendor = "generic"
+                # 2. openWB
+                if device_config.get("type").startswith("openwb_"):
+                    device_vendor = "openwb"
+                # 3. huawei
+                elif device_config.get("type").startswith("huawei"):
+                    device_vendor = "huawei"
+                # 4. kostal
+                elif device_config.get("type").startswith("kostal"):
+                    device_vendor = "kostal"
+                # 5. Siemens
+                elif device_config.get("type").startswith("siemens"):
+                    device_vendor = "siemens"
+                # 6 sma
+                elif device_config.get("type").startswith("sma_"):
+                    device_vendor = "sma"
+                elif device_config.get("type") == "sonnenbatterie":
+                    device_vendor = "sonnen"
+                elif device_config.get("type") == "azzurro_sofar":
+                    device_config.update({"type": "sofar"})
+                    device_vendor = "sofar"
+                # add "vendor" to device
+                if "vendor" not in device_config:
+                    device_config.update({"vendor": device_vendor})
+                    log.debug(f"Added vendor '{device_vendor}' to device '{device_config['name']}'")
+                    log.debug(f"Device configuration: {device_config}")
+                    return {topic: device_config}
+        self._loop_all_received_topics(upgrade)
+        self.__update_topic("openWB/system/datastore_version", 60)
+
+    def upgrade_datastore_60(self) -> None:
+        def upgrade(topic: str, payload) -> None:
+            if re.search("openWB/system/device/[0-9]+", topic) is not None:
+                payload = decode_payload(payload)
+                # remove shelly generation
+                if payload.get("type") == "shelly" and "generation" in payload["configuration"]:
+                    payload["configuration"].pop("generation")
+                # add factor
+                if payload.get("type") == "shelly" and "factor" not in payload["configuration"]:
+                    payload["configuration"].update({"factor": -1})
+                Pub().pub(topic, payload)
+        self._loop_all_received_topics(upgrade)
+        self.__update_topic("openWB/system/datastore_version", 61)
